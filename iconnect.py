@@ -1,6 +1,9 @@
 #!/usr/bin/env python
+import cmd
 import fnmatch
+import shlex
 import os
+import subprocess
 
 from irods.exception import CollectionDoesNotExist
 from irods.session import iRODSSession
@@ -9,40 +12,57 @@ from irods.session import iRODSSession
 HOME = "/trend/home/trirods"
 
 
-def Connection():
-    """Closure encapsulating an irods connection
+class Connection(cmd.Cmd, object):
+    """Command processor for an irods connection
     """
-    environment = os.path.expanduser("~/.irods/irods_environment.json")
-    collection = [None, ]
 
-    def cd(session, *args):
-        """List the current subcollections
+    sesssion = None
+
+    cursor = None
+
+    def default(self, line):
+        """Handle unknown commands
         """
+        args = shlex.split(line)
+        print "... unknown command `{:}`".format(args[0])
+
+    def do_cd(self, line):
+        """Change the current irods collection
+        """
+        # Parse the new path
+        args = shlex.split(line)
         if not args:
             path = HOME
         elif args[0].startswith("/"):
             path = args[0]
         else:
-            path = os.path.join(collection[0].path, args[0])
+            path = os.path.join(self.cursor.path, args[0])
             path = os.path.normpath(path)
+
+        # Fetch the corresponding irods collection
         try:
-            collection[0] = session.collections.get(path)
+            self.cursor = self.session.collections.get(path)
         except CollectionDoesNotExist:
             print "... path `{:}` does not exist".format(args[0])
+        else:
+            # Update the prompt
+            current = os.path.split(self.cursor.path)[1]
+            self.prompt = "[trirods@ccirods {:}]$ ".format(current)
 
-    def ls(session, *args):
-        """List the current subcollections
+    def do_ls(self, line):
+        """List the objects inside the current irods collection
         """
+        args = shlex.split(line)
         if not args:
             args = ("*",)
 
         for iteration, pattern in enumerate(args):
             # Find items that match the pattern
             content = {}
-            for c in collection[0].subcollections:
+            for c in self.cursor.subcollections:
                 if fnmatch.fnmatch(c.name, pattern):
                     content[c.name] = c
-            for d in collection[0].data_objects:
+            for d in self.cursor.data_objects:
                 if fnmatch.fnmatch(d.name, pattern):
                     content[d.name] = d
 
@@ -53,38 +73,32 @@ def Connection():
                 print "{:}:".format(pattern)
             print sorted(content.keys())
 
-    # Map the commands to valid names
-    action = {"ls": ls, "cd": cd}
+    def do_shell(self, line):
+        args = shlex.split(line)
+        if args and (args[0] == "cd"):
+            os.chdir(args[1])
+        else:
+            p = subprocess.Popen(line, shell=True)
+            p.communicate()
 
-    def connect():
-        """Connect to an irods server
+    def do_EOF(self, line):
+        print ""
+        return True
+
+    def cmdloop(self, intro=None):
+        """Override the default command loop in order to catch Ctrl+C
         """
-        with iRODSSession(irods_env_file=environment) as session:
-            # Fetch the home collection
-            cd(session)
+        environment = os.path.expanduser("~/.irods/irods_environment.json")
+        with iRODSSession(irods_env_file=environment) as self.session:
+            self.do_cd("")
 
-            # Main loop over commands
             while True:
-                current_dir = os.path.split(collection[0].path)[1]
-                print "[trirods@ccirods {:}]$".format(current_dir),
                 try:
-                    args = raw_input().split()
-                    try:
-                        command = action[args[0]]
-                    except KeyError:
-                        print "... unknown command `{:}`".format(args[0])
-                        continue
-                    command(session, *args[1:])
-                except KeyboardInterrupt:
-                    print ""
-                    continue
-                except (EOFError, SystemExit):
-                    print ""
+                    super(Connection, self).cmdloop(intro="")
                     break
+                except KeyboardInterrupt:
+                    print("^C")
 
-    return connect
 
-
-if __name__ == "__main__":
-    connect = Connection()
-    connect()
+if __name__ == '__main__':
+    Connection().cmdloop()
