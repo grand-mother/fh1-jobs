@@ -9,10 +9,13 @@ from irods.password_obfuscation import encode
 
 # Read the password from the command line
 try:
-    password = getpass.getpass("Irods password:")
+    password = getpass.getpass("Enter irods password:")
     confirm = getpass.getpass("Confirm password:")
 except KeyboardInterrupt:
-    print ""
+    print "^C"
+    sys.exit(0)
+except EOFError:
+    print "^D"
     sys.exit(0)
 if password != confirm:
     raise ValueError("confirmation does not match")
