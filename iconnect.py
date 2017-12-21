@@ -26,6 +26,20 @@ class Connection(cmd.Cmd, object):
         args = shlex.split(line)
         print "... unknown command `{:}`".format(args[0])
 
+    def get_content(self, pattern, data=True, collections=True):
+        """Get items within the collection that match the pattern
+        """
+        content = {}
+        if collections:
+            for c in self.cursor.subcollections:
+                if fnmatch.fnmatch(c.name, pattern):
+                    content[c.name] = c
+        if data:
+            for d in self.cursor.data_objects:
+                if fnmatch.fnmatch(d.name, pattern):
+                    content[d.name] = d
+        return content
+
     def do_cd(self, line):
         """Change the current irods collection
         """
@@ -49,6 +63,9 @@ class Connection(cmd.Cmd, object):
             current = os.path.split(self.cursor.path)[1]
             self.prompt = "[trirods@ccirods {:}]$ ".format(current)
 
+    def complete_cd(self, text, line, begidx, endidx):
+        return self.get_content(text + "*", data=False).keys()
+
     def do_ls(self, line):
         """List the objects inside the current irods collection
         """
@@ -58,13 +75,7 @@ class Connection(cmd.Cmd, object):
 
         for iteration, pattern in enumerate(args):
             # Find items that match the pattern
-            content = {}
-            for c in self.cursor.subcollections:
-                if fnmatch.fnmatch(c.name, pattern):
-                    content[c.name] = c
-            for d in self.cursor.data_objects:
-                if fnmatch.fnmatch(d.name, pattern):
-                    content[d.name] = d
+            content = self.get_content(pattern)
 
             # Print the result
             if iteration > 0:
@@ -72,6 +83,12 @@ class Connection(cmd.Cmd, object):
             if len(args) > 1:
                 print "{:}:".format(pattern)
             print sorted(content.keys())
+
+    def complete_ls(self, text, line, begidx, endidx):
+        return self.get_content(text + "*").keys()
+
+    def do_pwd(self, line):
+        print self.cursor.path
 
     def do_shell(self, line):
         args = shlex.split(line)
@@ -82,7 +99,6 @@ class Connection(cmd.Cmd, object):
             p.communicate()
 
     def do_EOF(self, line):
-        print ""
         return True
 
     def cmdloop(self, intro=None):
@@ -98,6 +114,7 @@ class Connection(cmd.Cmd, object):
                     break
                 except KeyboardInterrupt:
                     print("^C")
+            print
 
 
 if __name__ == '__main__':
