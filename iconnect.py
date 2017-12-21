@@ -225,7 +225,7 @@ class Connection(cmd.Cmd, object):
 
     def do_put(self, line):
         try:
-            opts, args = self.parse_command("rm", "rf", line)
+            opts, args = self.parse_command("put", "rf", line)
         except self._ConnectionError:
             return
 
@@ -266,6 +266,10 @@ class Connection(cmd.Cmd, object):
                     target = dst
 
                 if os.path.isdir(src):
+                    if not recursive:
+                        self.println("... put: omitting collection `{:}`",
+                                     basname)
+                        raise self._ConnectionError()
                     if not self.session.collections.exists(target):
                         self.session.collections.create(target)
                     children = [os.path.join(src, f) for f in os.listdir(src)]
@@ -286,6 +290,18 @@ class Connection(cmd.Cmd, object):
             upload(srcs, dst)
         except self._ConnectionError:
             return
+
+    def complete_put(self, text, line, begidx, endidx):
+        try:
+            opts, args = self.parse_command("put", "rf", line[3:], noargs=True)
+        except self._ConnectionError:
+            return []
+        pattern = text + "*"
+        nargs = len(args)
+        if (nargs < 1) or ((nargs == 1) and (line[-1] != " ")):
+            return filter(lambda s:fnmatch.fnmatch(s, pattern), os.listdir("."))
+        else:
+            return self.get_content(pattern).keys()
 
     def do_shell(self, line):
         args = shlex.split(line)
