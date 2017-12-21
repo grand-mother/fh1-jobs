@@ -2,8 +2,9 @@
 import cmd
 import fnmatch
 import getopt
-import shlex
 import os
+import readline
+import shlex
 import subprocess
 
 from irods.exception import (CATALOG_ALREADY_HAS_ITEM_BY_THAT_NAME,
@@ -18,11 +19,16 @@ from irods.keywords import FORCE_FLAG_KW
 HOME = "/trend/home/trirods/data"
 
 
+# Redefine the delimiters according to file name syntax. This is required
+# for autocompletion of file names.
+readline.set_completer_delims(" \t\n")
+
+
 class Connection(cmd.Cmd, object):
     """Command processor for an irods connection
     """
 
-    sesssion = None
+    session = None
 
     cursor = None
 
@@ -35,11 +41,32 @@ class Connection(cmd.Cmd, object):
         args = shlex.split(line)
         self.println("... unknown command `{:}`", args[0])
 
+    def completedefault(self, text, line, begidx, endidx):
+        dirname, _, content = self.get_content(text + "*")
+        completion = content.keys()
+        if dirname:
+            dirname = dirname.replace("/", r"/")
+            completion = [r"/".join((dirname, c)) for c in completion]
+        return completion
+
     def get_content(self, pattern, data=True, collections=True, base=None):
         """Get items within the collection that match the pattern
         """
         if base is None:
             base = self.cursor
+
+        try:
+            dirname, basename = pattern.rsplit("/", 1)
+        except ValueError:
+            dirname = None
+        else:
+            path = self.get_path(dirname, base)
+            try:
+                base = self.session.collections.get(path)
+            except CollectionDoesNotExist:
+                return []
+            pattern = basename
+
         content = {}
         if collections:
             for c in base.subcollections:
@@ -49,7 +76,7 @@ class Connection(cmd.Cmd, object):
             for d in base.data_objects:
                 if fnmatch.fnmatch(d.name, pattern):
                     content[d.name] = d
-        return content
+        return dirname, base, content
 
     def get_path(self, path, base=None):
         if path.startswith("/"):
@@ -124,9 +151,6 @@ class Connection(cmd.Cmd, object):
             current = irods_basename(self.cursor.path)
             self.prompt = "[trirods@ccirods {:}]$ ".format(current)
 
-    def complete_cd(self, text, line, begidx, endidx):
-        return self.get_content(text + "*", data=False).keys()
-
     def do_ls(self, line):
         """List the objects inside the current irods collection
         """
@@ -139,7 +163,7 @@ class Connection(cmd.Cmd, object):
 
         for iteration, pattern in enumerate(args):
             # Find items that match the pattern
-            content = self.get_content(pattern)
+            dirname, base, content = self.get_content(pattern)
 
             # Print the result
             if iteration > 0:
@@ -147,9 +171,6 @@ class Connection(cmd.Cmd, object):
             if len(args) > 1:
                 self.println("{:}:", pattern)
             self.println(sorted(content.keys()))
-
-    def complete_ls(self, text, line, begidx, endidx):
-        return self.get_content(text + "*").keys()
 
     def do_mkdir(self, line):
         try:
@@ -165,9 +186,6 @@ class Connection(cmd.Cmd, object):
                 self.println("... mkdir: cannot create collection `{:}`:"
                              " Object exists", irods_basename(path))
                 break
-
-    def complete_mkdir(self, text, line, begidx, endidx):
-        return self.get_content(text + "*").keys()
 
     def do_pwd(self, line):
         self.println(self.cursor.path)
@@ -229,9 +247,6 @@ class Connection(cmd.Cmd, object):
                 self.println("... rm: cannot remove object `{:}`:"
                              "No such data or collection", basename)
                 return
-
-    def complete_rm(self, text, line, begidx, endidx):
-        return self.get_content(text + "*").keys()
 
     def do_put(self, line):
         try:
@@ -311,7 +326,7 @@ class Connection(cmd.Cmd, object):
         if (nargs < 1) or ((nargs == 1) and (line[-1] != " ")):
             return filter(lambda s:fnmatch.fnmatch(s, pattern), os.listdir("."))
         else:
-            return self.get_content(pattern).keys()
+            return self.completedefault(text, line, begidx, endidx)
 
     def do_get(self, line):
         try:
@@ -372,7 +387,8 @@ class Connection(cmd.Cmd, object):
                         os.makedirs(target)
 
                     base = self.session.collections.get(src)
-                    newsrcs = self.get_content("*", base=base).keys()
+                    _, _, content = self.get_content("*", base=base)
+                    newsrcs = content.keys()
                     newsrcs = [self.get_path(src, base=base) for src in newsrcs]
                     download(newsrcs, target, True)
                 else:
