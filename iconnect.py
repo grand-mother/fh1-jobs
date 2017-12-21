@@ -12,9 +12,10 @@ from irods.exception import (CATALOG_ALREADY_HAS_ITEM_BY_THAT_NAME,
                              USER_FILE_DOES_NOT_EXIST)
 from irods.session import iRODSSession
 from irods.data_object import irods_basename
+from irods.keywords import FORCE_FLAG_KW
 
 
-HOME = "/trend/home/trirods/grand"
+HOME = "/trend/home/trirods/data"
 
 
 class Connection(cmd.Cmd, object):
@@ -34,31 +35,40 @@ class Connection(cmd.Cmd, object):
         args = shlex.split(line)
         self.println("... unknown command `{:}`", args[0])
 
-    def get_content(self, pattern, data=True, collections=True):
+    def get_content(self, pattern, data=True, collections=True, base=None):
         """Get items within the collection that match the pattern
         """
+        if base is None:
+            base = self.cursor
         content = {}
         if collections:
-            for c in self.cursor.subcollections:
+            for c in base.subcollections:
                 if fnmatch.fnmatch(c.name, pattern):
                     content[c.name] = c
         if data:
-            for d in self.cursor.data_objects:
+            for d in base.data_objects:
                 if fnmatch.fnmatch(d.name, pattern):
                     content[d.name] = d
         return content
 
-    def get_path(self, path):
+    def get_path(self, path, base=None):
         if path.startswith("/"):
             return path
         else:
-            path = os.path.join(self.cursor.path, path)
+            if base is None:
+                base = self.cursor
+            path = os.path.join(base.path, path)
             return os.path.normpath(path)
 
     def parse_command(self, command, options, line, noargs=False):
         """Parse a command line for arguments and options
         """
-        args = shlex.split(line)
+        try:
+            args = shlex.split(line)
+        except ValueError as e:
+            self.println("... {:}: {:}", command, e.message)
+            raise self._ConnectionError()
+
         try:
             opts, args = getopt.getopt(args, options)
         except getopt.GetoptError as e:
@@ -268,7 +278,7 @@ class Connection(cmd.Cmd, object):
                 if os.path.isdir(src):
                     if not recursive:
                         self.println("... put: omitting collection `{:}`",
-                                     basname)
+                                     basename)
                         raise self._ConnectionError()
                     if not self.session.collections.exists(target):
                         self.session.collections.create(target)
@@ -302,6 +312,89 @@ class Connection(cmd.Cmd, object):
             return filter(lambda s:fnmatch.fnmatch(s, pattern), os.listdir("."))
         else:
             return self.get_content(pattern).keys()
+
+    def do_get(self, line):
+        try:
+            opts, args = self.parse_command("get", "rf", line)
+        except self._ConnectionError:
+            return
+
+        recursive = False
+        request_confirmation = True
+        for opt, param in opts:
+            if opt == "-r":
+                recursive = True
+            elif opt == "-f":
+                request_confirmation = False
+
+        # Parse the src(s) and the destination
+        if len(args) == 1:
+            srcs = args
+            dst = "."
+        else:
+            if len(args) == 2:
+                srcs = (args[0],)
+            else:
+                srcs = args[:-1]
+            dst = args[-1]
+
+        # Check the consistency of the inputs
+        if os.path.isdir(dst):
+            isdir = True
+        else:
+            isdir = False
+            if len(srcs) > 1:
+                self.println("... get: target `{:}' is not a directory",
+                             os.path.basename(dst))
+                return
+
+        # Download the data
+        def download(srcs, dst, isdir):
+            for src in srcs:
+                basename = os.path.basename(src)
+                if isdir:
+                    target = os.path.join(dst, basename)
+                else:
+                    target = dst
+
+                if self.session.collections.exists(src):
+                    if not recursive:
+                        self.println("... get: omitting collection `{:}`",
+                                     irods_basename(src))
+                        raise self._ConnectionError()
+
+                    if os.path.exists(target):
+                        if not os.path.isdir(target):
+                            self.println("get: cannot overwrite non-directory "
+                                         "`{:}'", target)
+                            raise self._ConnectionError()
+                    else:
+                        os.makedirs(target)
+
+                    base = self.session.collections.get(src)
+                    newsrcs = self.get_content("*", base=base).keys()
+                    newsrcs = [self.get_path(src, base=base) for src in newsrcs]
+                    download(newsrcs, target, True)
+                else:
+                    if not self.session.data_objects.exists(src):
+                        self.println("... get: cannot stat `{:}`: No such data "
+                                     "object of collection",
+                                     irods_basename(src))
+                        raise self._ConnectionError()
+
+                    if os.path.exists(target) and request_confirmation:
+                        if not self.ask_for_confirmation(
+                            "get: overwrite file `{:}'?", basename):
+                            continue
+
+                    opts = { FORCE_FLAG_KW : True }
+                    self.session.data_objects.get(src, target, **opts)
+
+        srcs = [self.get_path(src) for src in srcs]
+        try:
+            download(srcs, dst, isdir)
+        except self._ConnectionError:
+            return
 
     def do_shell(self, line):
         args = shlex.split(line)
